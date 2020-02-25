@@ -6,7 +6,10 @@ Set Asymmetric Patterns.
 Require Import Ensembles Finite_sets Finite_sets_facts Powerset Powerset_facts.
 Require Import Arith Omega.
 
-Require Import Tapl.Sets.
+From Ltac2 Require Import Ltac2 Notations.
+From Ltac2 Require Control.
+
+From Tapl Require Import Sets Tactics.
 
 Inductive term: Set :=
   | TTrue: term
@@ -54,7 +57,7 @@ Hint Constructors term consts size depth: core.
 
 Definition term_eq_dec: forall t1 t2: term, {t1 = t2} + {t1 <> t2}.
 Proof.
-  refine (fix term_eq t1 t2 :=
+  refine '(fix term_eq t1 t2 :=
     match t1, t2 with
     | TTrue, TTrue => Yes
     | TFalse, TFalse => Yes
@@ -71,12 +74,17 @@ Proof.
             else No
           else No
     | _, _ => No
-    end); congruence.
+    end); simpl;
+    Control.enter (fun _ => match! goal with
+    | [ |- _ = _ ] => try reflexivity
+    | [ |- _ <> _ ] => unfold not; try (inversion 1)
+    end);
+    subst; try discriminate; auto with sets.
 Qed.
 
-Definition consts_dec: forall t con, {consts t con} + {~ consts t con}.
+Definition consts_dec: forall t con, {In _ (consts t) con} + {~ In _ (consts t) con}.
 Proof.
-  refine (fix consts_dec t con :=
+  refine '(fix consts_dec t con :=
     match t, con with
     | TTrue, TTrue | TFalse, TFalse | TO, TO => Yes
     | TSucc t', _ | TPred t', _ | TIsZero t', _ => Reduce (consts_dec t' con)
@@ -90,10 +98,15 @@ Proof.
               else No
     | _, _ => No
     end);
-    match goal with
-    | [ |- consts _ _ ] => constructor
-    | [ |- ~ consts _ _ ] => inversion 1
-    end; sets_auto.
+    Control.enter (fun _ => match! goal with
+    | [ |- In _ (consts _) _ ] => constructor
+    | [ |- ~ In _ (consts _) _ ] => inversion 1
+    end); sets_basic.
+    inversion H4.
+    - apply y, H5.
+    - inversion H5.
+      + apply y0, H7.
+      + apply y1, H7.
 Defined.
 
 Inductive is_const: term -> Prop :=

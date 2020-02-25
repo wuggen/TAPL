@@ -1,2 +1,3 @@
 -R ./src Tapl
+src/Tactics.v
 src/Sets.v
