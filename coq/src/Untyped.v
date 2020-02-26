@@ -9,7 +9,7 @@ Require Import Arith Omega.
 From Ltac2 Require Import Ltac2 Notations.
 From Ltac2 Require Control.
 
-From Tapl Require Import Sets Tactics.
+From Tapl Require Import Sets Tactics Notations.
 
 Inductive term: Set :=
   | TTrue: term
@@ -101,12 +101,7 @@ Proof.
     Control.enter (fun _ => match! goal with
     | [ |- In _ (consts _) _ ] => constructor
     | [ |- ~ In _ (consts _) _ ] => inversion 1
-    end); sets_basic.
-    inversion H4.
-    - apply y, H5.
-    - inversion H5.
-      + apply y0, H7.
-      + apply y1, H7.
+    end); sets_auto.
 Defined.
 
 Inductive is_const: term -> Prop :=
@@ -116,20 +111,17 @@ Inductive is_const: term -> Prop :=
 
 Hint Constructors is_const: core.
 
-Ltac decide_consts :=
-  intros; match goal with
-  | [ H: consts ?t ?con |- _ ] => destruct (consts_dec t con); inversion H
-  | [ H: In _ (consts ?t) ?con |- _ ] => destruct (consts_dec t con); inversion H
-  | [ H: is_const _ |- _ ] => inversion H
-  end; sets_auto.
+Ltac2 consts_auto0 () :=
+  intros; repeat (match! goal with
+  | [ h: consts ?t ?con |- _ ] => destruct (consts_dec &t &con); rawinversion h
+  | [ h: In _ (consts ?t) ?con |- _ ] => destruct (consts_dec &t &con); rawinversion h
+  | [ h: is_const _ |- _ ] => rawinversion h
+  end); sets_auto.
+Ltac2 Notation consts_auto := consts_auto0 ().
 
 Lemma consts_subset: forall t, Included _ (consts t) (Triple _ TTrue TFalse TO).
 Proof.
-  induction t; sets_auto.
-
-  inversion H; sets_auto.
-  inversion H; sets_auto.
-  inversion H.
+  induction t; sets_auto; consts_auto.
 Qed.
 
 Hint Resolve consts_subset: core.

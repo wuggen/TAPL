@@ -42,28 +42,28 @@ Ltac2 msg_join (m: message) (ms: message list) :=
 
 Ltac2 msg_lines ms := msg_join newline ms.
 
-Ltac2 Notation "simple" "rawinversion"
-    arg(self)
-    pat(opt(seq("as", intropattern)))
-    ids(opt(seq("in", list1(ident)))) :=
-    Std.inversion Std.SimpleInversion (Std.ElimOnIdent arg) pat ids.
-
-Ltac2 Notation "rawinversion"
-    arg(self)
-    pat(opt(seq("as", intropattern)))
-    ids(opt(seq("in", list1(ident)))) :=
-    Std.inversion Std.FullInversion (Std.ElimOnIdent arg) pat ids.
-
-Ltac2 Notation "rawinversion_clear"
-    arg(self)
-    pat(opt(seq("as", intropattern)))
-    ids(opt(seq("in", list1(ident)))) :=
-    Std.inversion Std.FullInversionClear (Std.ElimOnIdent arg) pat ids.
-
 Ltac2 alternation (a: unit -> unit) (b: unit -> unit) :=
     Control.plus a (fun _ => b ()).
 
 Ltac2 Notation a(self) "||" b(self) := alternation (fun _ => a) (fun _ => b).
+
+Ltac2 Notation "simple" "rawinversion"
+  arg(self)
+  pat(opt(seq("as", intropattern)))
+  ids(opt(seq("in", list1(ident)))) :=
+  Std.inversion Std.SimpleInversion (Std.ElimOnIdent arg) pat ids.
+
+Ltac2 Notation "rawinversion"
+  arg(self)
+  pat(opt(seq("as", intropattern)))
+  ids(opt(seq("in", list1(ident)))) :=
+  Std.inversion Std.FullInversion (Std.ElimOnIdent arg) pat ids.
+
+Ltac2 Notation "rawinversion_clear"
+  arg(self)
+  pat(opt(seq("as", intropattern)))
+  ids(opt(seq("in", list1(ident)))) :=
+  Std.inversion Std.FullInversionClear (Std.ElimOnIdent arg) pat ids.
 
 Ltac2 sig_auto0 () :=
     repeat (match! goal with
