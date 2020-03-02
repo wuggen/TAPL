@@ -78,3 +78,16 @@ Ltac2 conj_disj_elim tac :=
         | [ |- _ /\ _ ] => split
         | [ |- _ \/ _ ] => (left; progress tac) || (right; progress tac) || ()
         end); auto.
+
+Ltac sig_auto :=
+    repeat match goal with
+        | [ H: { _ : _ | _ } |- _ ] => destruct H
+        end; auto.
+
+Ltac conj_disj_elim tac :=
+    repeat match goal with
+        | [ H: _ /\ _ |- _ ] => destruct H
+        | [ H: _ \/ _ |- _ ] => destruct H
+        | [ |- _ /\ _ ] => split
+        | [ |- _ \/ _ ] => (left; progress tac) || (right; progress tac) || idtac
+        end; auto.

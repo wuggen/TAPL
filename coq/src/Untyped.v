@@ -6,9 +6,6 @@ Set Asymmetric Patterns.
 Require Import Ensembles Finite_sets Finite_sets_facts Powerset Powerset_facts.
 Require Import Arith Omega.
 
-From Ltac2 Require Import Ltac2 Notations.
-From Ltac2 Require Control.
-
 From Tapl Require Import Sets Tactics Notations.
 
 Inductive term: Set :=
@@ -19,6 +16,20 @@ Inductive term: Set :=
   | TSucc: term -> term
   | TPred: term -> term
   | TIsZero: term -> term.
+
+Inductive bool_val: term -> Prop :=
+  | BVTrue: bool_val TTrue
+  | BVFalse: bool_val TFalse.
+
+Inductive nat_val: term -> Prop :=
+  | NVO: nat_val TO
+  | NVSucc: forall t, nat_val t -> nat_val (TSucc t).
+
+Inductive value: term -> Prop :=
+  | VBool: forall t, bool_val t -> value t
+  | VNat: forall t, nat_val t -> value t.
+
+Hint Constructors bool_val nat_val value: core.
 
 Inductive consts: term -> Ensemble term :=
   | CTrue: consts TTrue TTrue
@@ -57,7 +68,7 @@ Hint Constructors term consts size depth: core.
 
 Definition term_eq_dec: forall t1 t2: term, {t1 = t2} + {t1 <> t2}.
 Proof.
-  refine '(fix term_eq t1 t2 :=
+  refine (fix term_eq t1 t2 :=
     match t1, t2 with
     | TTrue, TTrue => Yes
     | TFalse, TFalse => Yes
@@ -75,16 +86,16 @@ Proof.
           else No
     | _, _ => No
     end); simpl;
-    Control.enter (fun _ => match! goal with
+    match goal with
     | [ |- _ = _ ] => try reflexivity
     | [ |- _ <> _ ] => unfold not; try (inversion 1)
-    end);
+    end;
     subst; try discriminate; auto with sets.
 Qed.
 
 Definition consts_dec: forall t con, {In _ (consts t) con} + {~ In _ (consts t) con}.
 Proof.
-  refine '(fix consts_dec t con :=
+  refine (fix consts_dec t con :=
     match t, con with
     | TTrue, TTrue | TFalse, TFalse | TO, TO => Yes
     | TSucc t', _ | TPred t', _ | TIsZero t', _ => Reduce (consts_dec t' con)
@@ -98,10 +109,10 @@ Proof.
               else No
     | _, _ => No
     end);
-    Control.enter (fun _ => match! goal with
+    match goal with
     | [ |- In _ (consts _) _ ] => constructor
     | [ |- ~ In _ (consts _) _ ] => inversion 1
-    end); sets_auto.
+    end; sets_auto.
 Defined.
 
 Inductive is_const: term -> Prop :=
@@ -111,13 +122,34 @@ Inductive is_const: term -> Prop :=
 
 Hint Constructors is_const: core.
 
-Ltac2 consts_auto0 () :=
-  intros; repeat (match! goal with
-  | [ h: consts ?t ?con |- _ ] => destruct (consts_dec &t &con); rawinversion h
-  | [ h: In _ (consts ?t) ?con |- _ ] => destruct (consts_dec &t &con); rawinversion h
-  | [ h: is_const _ |- _ ] => rawinversion h
-  end); sets_auto.
-Ltac2 Notation consts_auto := consts_auto0 ().
+Ltac consts_auto :=
+  subst; intros; try match goal with
+  | [ h: consts ?t ?con |- _ ] => destruct (consts_dec t con); inversion h
+  | [ h: In _ (consts ?t) ?con |- _ ] => destruct (consts_dec t con); inversion h
+  | [ h: is_const _ |- _ ] => inversion h
+  end;
+  repeat match goal with
+  | [ h: context[consts_dec ?t ?con] |- _ ] => destruct (consts_dec t con)
+  | [ x := context[consts_dec ?t ?con] |- _ ] => destruct (consts_dec t con)
+  end; sets_auto.
+
+Lemma consts_TSucc: forall t, consts (TSucc t) = consts t.
+Proof. sets_auto; consts_auto. Qed.
+
+Lemma consts_TPred: forall t, consts (TPred t) = consts t.
+Proof. sets_auto; consts_auto. Qed.
+
+Lemma consts_TIsZero: forall t, consts (TIsZero t) = consts t.
+Proof. sets_auto; consts_auto. Qed.
+
+Lemma consts_TIfThenElse: forall t1 t2 t3,
+  consts (TIfThenElse t1 t2 t3) = Union _ (consts t1) (Union _ (consts t2) (consts t3)).
+Proof. sets_auto; consts_auto. Qed.
+
+Lemma consts_singleton: forall t, is_const t -> consts t = Singleton _ t.
+Proof.
+  inversion 1; sets_auto; consts_auto.
+Qed.
 
 Lemma consts_subset: forall t, Included _ (consts t) (Triple _ TTrue TFalse TO).
 Proof.
@@ -125,26 +157,30 @@ Proof.
 Qed.
 
 Hint Resolve consts_subset: core.
+Hint Extern 1 =>
+  match goal with
+  | [ |- context[consts (TSucc _)] ] => rewrite consts_TSucc
+  | [ |- context[consts (TPred _)] ] => rewrite consts_TPred
+  | [ |- context[consts (TIsZero _)] ] => rewrite consts_TIsZero
+  | [ |- context[consts (TIfThenElse _ _ _)] ] => rewrite consts_TIfThenElse
+  | [ |- context[consts TTrue] ] => rewrite consts_singleton
+  | [ |- context[consts TFalse] ] => rewrite consts_singleton
+  | [ |- context[consts TO] ] => rewrite consts_singleton
+  end: core.
+
+Lemma Inhabited_consts: forall t, Inhabited _ (consts t).
+Proof.
+  induction t;
+  try match goal with
+  | [ |- context[consts TTrue] ] => apply (Inhabited_intro _ _ TTrue)
+  | [ |- context[consts TFalse] ] => apply (Inhabited_intro _ _ TFalse)
+  | [ |- context[consts TO] ] => apply (Inhabited_intro _ _ TO)
+  end; sets_auto.
+Qed.
 
 Lemma card_const_le_3: forall t n, cardinal _ (consts t) n -> n <= 3.
 Proof.
-  intros; specialize (@consts_subset t); eapply incl_card_le; sets_auto.
-  replace (Triple _ TTrue TFalse TO) with (Add _ (Add _ (Add _ (Empty_set _) TO) TFalse) TTrue).
-  constructor. constructor. constructor. constructor.
-  eauto with sets.
-  inversion 1; inversion H1.
-  inversion 1; inversion H1; inversion H3.
-  
-  sets_auto. inversion H0. inversion H1. inversion H3.
-  inversion H5.
-  inversion H5. apply Triple_r.
-  inversion H3. apply Triple_m.
-  inversion H1. apply Triple_l.
-
-  inversion H0.
-  apply Union_intror. apply In_singleton.
-  apply Union_introl, Union_intror. apply In_singleton.
-  do 2 apply Union_introl. apply Union_intror. apply In_singleton.
+  intros; specialize (@consts_subset t); apply incl_card_le; sets_auto.
 Qed.
 
 Definition is_const_dec: forall t, {is_const t} + {~ is_const t}.
@@ -165,27 +201,23 @@ Defined.
 
 Lemma no_nonconsts_in_consts: forall t t', In _ (consts t) t' -> is_const t'.
 Proof.
-  induction t; sets_auto; decide_consts.
+  induction t; sets_auto; consts_auto.
 Qed.
 
 Hint Resolve consts_subset no_nonconsts_in_consts: core.
 
-Lemma card_consts_singleton: forall t, is_const t -> consts t = Singleton _ t.
-Proof.
-  inversion 1; sets_auto;
-  match goal with
-  | [ H: In _ (consts _) _ |- _ ] => inversion H
-  | [ H: In _ (Singleton _ _) _ |- _ ] => inversion H
-  end; sets_auto.
-Qed.
-
-Hint Resolve card_consts_singleton: core.
-
 Definition card_consts_dec: forall t, {n: nat | cardinal _ (consts t) n}.
 Proof.
-
-
-
+  refine (fun t =>
+      let n1 := if consts_dec t TTrue
+        then 1 else 0
+      in let n2 := if consts_dec t TFalse
+        then S n1 else n1
+      in let n3 := if consts_dec t TO
+        then S n2 else n2
+      in [n3]).
+Abort.
+ 
 Definition size_dec: forall t, {n: nat | size t n}.
 Proof.
   refine (fix size_dec t :=
@@ -218,7 +250,76 @@ Proof.
     end); sig_auto.
 Qed.
 
-Lemma consts_le_size: forall t c s,
-  cardinal _ (consts t) c -> size t s -> c <= s.
+(** * Evaluation *)
+
+Inductive eval_bool: term -> term -> Prop :=
+  | EBIfTrue: forall t1 t2, eval_bool (TIfThenElse TTrue t1 t2) t1
+  | EBIfFalse: forall t1 t2, eval_bool (TIfThenElse TFalse t1 t2) t2
+  | EBIf: forall cond cond', eval_bool cond cond' ->
+      forall t1 t2, eval_bool (TIfThenElse cond t1 t2) (TIfThenElse cond' t1 t2).
+
+Notation "x +-> y" := (eval_bool x y) (at level 90).
+Hint Constructors eval_bool: core.
+
+Theorem eval_bool_det: forall t t': term, (t +-> t') ->
+  forall t'', (t +-> t'') -> t' = t''.
 Proof.
-  induction t; auto with sets.
+  induction 1; intros;
+  match goal with
+  | [ H: _ +-> _ |- _ ] => inversion H; try reflexivity; subst
+  end;
+  match goal with
+  | [ H: TTrue +-> _ |- _ ] => inversion H
+  | [ H: TFalse +-> _ |- _ ] => inversion H
+  | [ IH: forall t, ?c +-> t -> ?c' = t,
+      H: ?c +-> ?t' |- _ ] => rewrite (IH t' H)
+  end;
+  auto.
+Qed.
+
+Hint Resolve eval_bool_det: core.
+
+Definition bool_normal_form (t: term) : Prop := forall t', ~ (t +-> t').
+
+Hint Unfold bool_normal_form: core.
+
+Theorem bool_vals_normal_form: forall t, bool_val t -> bool_normal_form t.
+Proof.
+  inversion 1; autounfold with core; intros;
+  match goal with
+  | [ H: _ +-> _ |- _ ] => inversion H
+  end.
+Qed.
+
+Inductive eval_bool_multi: term -> term -> Prop :=
+  | EBMEval: forall t1 t2, (t1 +-> t2) -> eval_bool_multi t1 t2
+  | EBMRefl: forall t, eval_bool_multi t t
+  | EBMTrans: forall t1 t2 t3,
+      eval_bool_multi t1 t2 -> eval_bool_multi t2 t3 -> eval_bool_multi t1 t3.
+
+Notation "x +->* y" := (eval_bool_multi x y) (at level 90).
+Hint Constructors eval_bool_multi: core.
+
+Lemma eval_bool_multi_nf: forall t1 t2, bool_normal_form t1 -> (t1 +->* t2) -> t1 = t2.
+Proof.
+  autounfold with core; induction 2.
+  - exfalso; apply (H t2), H0.
+  - reflexivity.
+  - rewrite IHeval_bool_multi1 in *; try apply IHeval_bool_multi2; assumption.
+Qed.
+
+Hint Resolve eval_bool_multi_nf: core.
+
+Theorem bool_normal_form_unique: forall t u1,
+  bool_normal_form u1 -> (t +->* u1) -> forall u2,
+  bool_normal_form u2 -> (t +->* u2) ->
+  u1 = u2.
+Proof.
+  autounfold with core. induction 2; intros.
+
+  inversion H2; subst.
+  - apply (eval_bool_det H0 H3).
+  - exfalso; apply (H1 t2), H0.
+  - inversion H3; subst.
+    + rewrite (eval_bool_det H0 H5) in *. apply (eval_bool_multi_nf H H4).
+    + 
