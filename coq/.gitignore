@@ -3,7 +3,7 @@ Makefile*
 
 *.d
 *.aux
-*.glob
 *.vo
-*.vok
 *.vos
+*.vok
+*.glob
