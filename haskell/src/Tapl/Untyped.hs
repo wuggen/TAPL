@@ -1,3 +1,6 @@
+-- | Chapter 3 -- Untyped Arithmetic Expressions
+--   Chapter 4 -- An ML Implementation of Untyped Arithmetic Expressions
+
 {-# LANGUAGE LambdaCase #-}
 
 module Tapl.Untyped where
