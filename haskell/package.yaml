@@ -1,7 +1,5 @@
 name:                Tapl
 version:             0.1.0.0
-github:              "githubuser/Tapl"
-license:             BSD3
 author:              "Author name here"
 maintainer:          "example@example.com"
 copyright:           "2020 Author name here"
@@ -21,28 +19,7 @@ description:         Please see the README on GitHub at <https://github.com/gith
 
 dependencies:
 - base >= 4.7 && < 5
+- parsec >= 3.1 && < 4
 
 library:
   source-dirs: src
-
-executables:
-  Tapl-exe:
-    main:                Main.hs
-    source-dirs:         app
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    dependencies:
-    - Tapl
-
-tests:
-  Tapl-test:
-    main:                Spec.hs
-    source-dirs:         test
-    ghc-options:
-    - -threaded
-    - -rtsopts
-    - -with-rtsopts=-N
-    dependencies:
-    - Tapl

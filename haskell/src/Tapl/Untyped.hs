@@ -1,81 +1,130 @@
--- | Chapter 3 -- Untyped Arithmetic Expressions
---   Chapter 4 -- An ML Implementation of Untyped Arithmetic Expressions
-
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies #-}
 
-module Tapl.Untyped where
+-- | Types and Programming Languages
+--
+--   Chapter 3 -- Untyped Arithmetic Expressions
+--   Chapter 4 -- An ML Implementation of Untyped Arithmetic Expressions
+module Tapl.Untyped 
+  ( Term(..)
+  , TermClass(..)
+  , classify
+  , Untyped(..)
+  , UntypedBigSteps(..)
+  , utRenderEval
+  , utRenderEvalStep
+  , utRenderEvalList
+  , bsRenderEval
+  ) where
 
-data Term
-    = TTrue
-    | TFalse
-    | TIf Term Term Term
-    | TZero
-    | TSucc Term
-    | TPred Term
-    | TIsZero Term
-    deriving (Show, Eq, Ord)
+import Data.Proxy
+import Text.Parsec (ParseError)
 
-isNumVal :: Term -> Bool
-isNumVal = \case
-    TZero -> True
-    TSucc t -> isNumVal t
-    _ -> False
+import Semantics.STS
+import Tapl.Untyped.Term
+import Tapl.Util
 
-isBoolVal :: Term -> Bool
-isBoolVal = \case
-    TTrue -> True
-    TFalse -> True
-    _ -> False
+data Untyped
+instance STS Untyped where
+    type State Untyped = Term
 
-isVal :: Term -> Bool
-isVal t = isBoolVal t || isNumVal t
+    data Context Untyped = UTContext
+    data PredicateFailure Untyped
+        = UTNoRulesApply
+        deriving (Show, Eq, Ord)
 
-data EvalError = NoRulesApply
-    deriving (Show, Eq, Ord)
+    rules = [ do
+          t <- currentState
+          case t of
+            TIf TTrue t _ -> succeedWith t
+            TIf TFalse _ t -> succeedWith t
+            TIf cond tCase fCase -> do
+                cond' <- trans UTContext cond
+                succeedWith $ TIf cond' tCase fCase
 
-eval1 :: Term -> Either EvalError Term
-eval1 = \case
-    -- E-IfTrue
-    TIf TTrue t1 _ -> Right t1
+            TSucc t -> do
+                t' <- trans UTContext t
+                succeedWith $ TSucc t'
 
-    -- E-IfFalse
-    TIf TFalse _ t2 -> Right t2
+            TPred TZero -> succeedWith TZero
+            TPred (TSucc t) | classify t == NumVal -> succeedWith t
+            TPred t -> do
+                t' <- trans UTContext t
+                succeedWith $ TPred t'
 
-    -- E-If
-    TIf cond t1 t2 -> do
-        cond' <- eval1 cond
-        Right (TIf cond' t1 t2)
+            TIsZero TZero -> succeedWith TTrue
+            TIsZero (TSucc t) | classify t == NumVal -> succeedWith TFalse
+            TIsZero t -> do
+                t' <- trans UTContext t
+                succeedWith $ TIsZero t'
 
-    -- E-Succ
-    TSucc t -> do
-        t' <- eval1 t
-        Right (TSucc t')
+            _ -> failBecause UTNoRulesApply
+      ]
 
-    -- E-PredZero
-    TPred TZero -> Right TZero
+data UntypedBigSteps
+instance STS UntypedBigSteps where
+    type State UntypedBigSteps = Term
 
-    -- E-PredSucc
-    TPred (TSucc t) | isNumVal t -> Right t
+    data Context UntypedBigSteps = UTBSContext
+    data PredicateFailure UntypedBigSteps
+        = BSNoRulesApply
+        deriving (Show, Eq, Ord)
 
-    -- E-Pred
-    TPred t -> do
-        t' <- eval1 t
-        Right (TPred t')
+    rules = [ do
+          t <- currentState
+          case t of
+              v | classify v /= NonValue -> succeedWith v
 
-    -- E-IsZeroZero
-    TIsZero TZero -> Right TTrue
+              TIf t1 t2 t3 -> do
+                  t1' <- trans UTBSContext t1
+                  case t1' of
+                      TTrue -> succeedWithTrans UTBSContext t2
+                      TFalse -> succeedWithTrans UTBSContext t3
+                      _ -> failBecause BSNoRulesApply
 
-    -- E-IsZeroSucc
-    TIsZero (TSucc t) | isNumVal t -> Right TFalse
+              TSucc t1 -> do
+                  t1' <- trans UTBSContext t1
+                  classify t1' == NumVal ?! BSNoRulesApply
+                  succeedWith (TSucc t1')
 
-    -- E-IsZero
-    TIsZero t -> do
-        t' <- eval1 t
-        Right (TIsZero t')
+              TPred t1 -> do
+                  t1' <- trans UTBSContext t1
+                  case t1' of
+                      TZero -> succeedWith TZero
+                      TSucc nv | classify nv == NumVal -> succeedWith nv
+                      _ -> failBecause BSNoRulesApply
 
-    _ -> Left NoRulesApply
+              TIsZero t1 -> do
+                  t1' <- trans UTBSContext t1
+                  case t1' of
+                      TZero -> succeedWith TTrue
+                      TSucc nv | classify nv == NumVal -> succeedWith TFalse
+                      _ -> failBecause BSNoRulesApply
+      ]
 
-eval :: Term -> Term
-eval t = case eval1 t of
-    Left _ -> t
-    Right t' -> eval t'
+utRenderEval
+  :: String
+  -> Either ParseError String
+utRenderEval = fmap (renderTerm . eval UTContext) . parseTerm
+
+utRenderEvalStep
+  :: String
+  -> Either (Either ParseError (PredicateFailure Untyped)) String
+utRenderEvalStep s = do
+    t <- fmapLeft Left $ parseTerm s
+    t' <- fmapLeft Right $ evalStep UTContext t
+    return $ renderTerm t'
+
+utRenderEvalList
+  :: String
+  -> Either ParseError [String]
+utRenderEvalList = fmap (fmap renderTerm . evalList UTContext) . parseTerm
+
+bsRenderEval
+  :: String
+  -> Either (Either ParseError (PredicateFailure UntypedBigSteps)) String
+bsRenderEval s = do
+    t <- fmapLeft Left $ parseTerm s
+    t' <- fmapLeft Right $ evalStep UTBSContext t
+    return $ renderTerm t'
