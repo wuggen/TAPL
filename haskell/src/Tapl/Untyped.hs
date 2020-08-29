@@ -31,12 +31,15 @@ instance STS Untyped where
 
     data Context Untyped = UTContext
     data PredicateFailure Untyped
-        = UTNoRulesApply
+        = UTStuck
+        | UTValue
         deriving (Show, Eq, Ord)
 
     rules = [ do
           t <- currentState
           case t of
+            t | classify t /= NonValue -> failBecause UTValue
+
             TIf TTrue t _ -> succeedWith t
             TIf TFalse _ t -> succeedWith t
             TIf cond tCase fCase -> do
@@ -59,7 +62,7 @@ instance STS Untyped where
                 t' <- trans UTContext t
                 succeedWith $ TIsZero t'
 
-            _ -> failBecause UTNoRulesApply
+            _ -> failBecause UTStuck
       ]
 
 data UntypedBigSteps

@@ -47,7 +47,8 @@ class (STS sub, STS super) => Embed sub super where
 instance (STS s) => Embed s s where
     embedFailure = id
 
-newtype Clause s a = Clause { runClause :: Context s -> State s -> Either (PredicateFailure s) (State s, a) }
+newtype Clause s a = Clause
+    { runClause :: Context s -> State s -> Either (PredicateFailure s) (State s, a) }
 
 instance Functor (Clause s) where
     fmap g (Clause c) = Clause $ \ctx -> fmap (fmap g) . c ctx
