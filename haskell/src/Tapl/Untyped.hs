@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -12,16 +13,15 @@ module Tapl.Untyped
   , classify
   , Untyped(..)
   , UntypedBigSteps(..)
-  , utRenderEval
-  , utRenderEvalStep
-  , utRenderEvalList
-  , bsRenderEval
+  , utRepl
+  , utbsRepl
   ) where
 
 import Data.Proxy
 import Text.Parsec (ParseError)
 
 import Semantics.STS
+import Tapl.Repl
 import Tapl.Untyped.Term
 import Tapl.Util
 
@@ -33,7 +33,9 @@ instance STS Untyped where
     data PredicateFailure Untyped
         = UTStuck
         | UTValue
-        deriving (Show, Eq, Ord)
+        deriving (Eq, Ord)
+
+    valueFailure = (== UTValue)
 
     rules = [ do
           t <- currentState
@@ -42,28 +44,33 @@ instance STS Untyped where
 
             TIf TTrue t _ -> succeedWith t
             TIf TFalse _ t -> succeedWith t
-            TIf cond tCase fCase -> do
+            TIf cond tCase fCase | classify cond == NonValue -> do
                 cond' <- trans UTContext cond
                 succeedWith $ TIf cond' tCase fCase
 
-            TSucc t -> do
+            TSucc t | classify t == NonValue -> do
                 t' <- trans UTContext t
                 succeedWith $ TSucc t'
 
             TPred TZero -> succeedWith TZero
             TPred (TSucc t) | classify t == NumVal -> succeedWith t
-            TPred t -> do
+            TPred t | classify t == NonValue -> do
                 t' <- trans UTContext t
                 succeedWith $ TPred t'
 
             TIsZero TZero -> succeedWith TTrue
             TIsZero (TSucc t) | classify t == NumVal -> succeedWith TFalse
-            TIsZero t -> do
+            TIsZero t | classify t == NonValue -> do
                 t' <- trans UTContext t
                 succeedWith $ TIsZero t'
 
             _ -> failBecause UTStuck
       ]
+
+instance Show (PredicateFailure Untyped) where
+    show = \case
+        UTStuck -> "Evaluation failure: stuck state"
+        UTValue -> "Term is already fully evaluated"
 
 data UntypedBigSteps
 instance STS UntypedBigSteps where
@@ -73,6 +80,8 @@ instance STS UntypedBigSteps where
     data PredicateFailure UntypedBigSteps
         = BSNoRulesApply
         deriving (Show, Eq, Ord)
+
+    valueFailure = const False
 
     rules = [ do
           t <- currentState
@@ -106,28 +115,43 @@ instance STS UntypedBigSteps where
                       _ -> failBecause BSNoRulesApply
       ]
 
-utRenderEval
-  :: String
-  -> Either ParseError String
-utRenderEval = fmap (renderTerm . eval UTContext) . parseTerm
+consts =
+  [ "if"
+  , "then"
+  , "else"
+  , "succ"
+  , "pred"
+  , "iszero"
+  , "true"
+  , "false"
+  ]
 
-utRenderEvalStep
-  :: String
-  -> Either (Either ParseError (PredicateFailure Untyped)) String
-utRenderEvalStep s = do
-    t <- fmapLeft Left $ parseTerm s
-    t' <- fmapLeft Right $ evalStep UTContext t
-    return $ renderTerm t'
+utReplFuncs :: ReplFuncs () Term Untyped
+utReplFuncs = ReplFuncs
+  { rfSystemName = "Basic Untyped"
+  , rfBind = Nothing
+  , rfClearEnv = Nothing
+  , rfNames = const consts
+  , rfPrepare = const Right
+  , rfContext = const UTContext
+  , rfParser = termParser
+  , rfRender = const renderTerm
+  }
 
-utRenderEvalList
-  :: String
-  -> Either ParseError [String]
-utRenderEvalList = fmap (fmap renderTerm . evalList UTContext) . parseTerm
+utRepl :: IO ()
+utRepl = repl utReplFuncs ()
 
-bsRenderEval
-  :: String
-  -> Either (Either ParseError (PredicateFailure UntypedBigSteps)) String
-bsRenderEval s = do
-    t <- fmapLeft Left $ parseTerm s
-    t' <- fmapLeft Right $ evalStep UTBSContext t
-    return $ renderTerm t'
+utbsReplFuncs :: ReplFuncs () Term UntypedBigSteps
+utbsReplFuncs = ReplFuncs
+  { rfSystemName = "Basic Untyped (big-steps)"
+  , rfBind = Nothing
+  , rfClearEnv = Nothing
+  , rfNames = const consts
+  , rfPrepare = const Right
+  , rfContext = const UTBSContext
+  , rfParser = termParser
+  , rfRender = const renderTerm
+  }
+
+utbsRepl :: IO ()
+utbsRepl = repl utbsReplFuncs ()

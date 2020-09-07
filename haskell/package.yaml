@@ -22,6 +22,7 @@ dependencies:
 - parsec >= 3.1 && < 4
 - haskeline >= 0.8 && < 1
 - exceptions >= 0.10 && < 1
+- transformers >= 0.5 && < 1
 
 library:
   source-dirs: src

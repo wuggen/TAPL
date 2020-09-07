@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
@@ -14,6 +15,8 @@ module Semantics.STS
 
   , Clause(..)
   , TransitionRule
+  , currentContext
+  , askContext
   , currentState
   , (?!)
   , failBecause
@@ -34,10 +37,12 @@ import Data.Either (isRight, fromRight)
 
 import Tapl.Util
 
-class STS s where
+class (Show (PredicateFailure s)) => STS s where
     type State s :: *
     data Context s :: *
     data PredicateFailure s :: *
+
+    valueFailure :: PredicateFailure s -> Bool
 
     rules :: [TransitionRule s]
 
@@ -77,12 +82,15 @@ currentContext = Clause $ \ctx s -> return (s, ctx)
 askContext :: (Context s -> a) -> Clause s a
 askContext f = Clause $ \ctx s -> return (s, f ctx)
 
+checkCondition :: Bool -> a -> PredicateFailure s -> Clause s a
+checkCondition cond ifTrue ifFalse = Clause $ \ctx s -> (if cond then Right (s, ifTrue) else Left ifFalse)
+
 (?!) :: Bool -> PredicateFailure s -> TransitionRule s
-cond ?! orElse = Clause $ \ctx s -> (if cond then Right (s, ()) else Left orElse)
+(?!) cond = checkCondition cond ()
 infix 1 ?!
 
-failBecause :: PredicateFailure s -> TransitionRule s
-failBecause = (False ?!)
+failBecause :: PredicateFailure s -> Clause s a
+failBecause = checkCondition False undefined
 
 succeedWith :: State s -> TransitionRule s
 succeedWith s = Clause $ const $ const (return (s, ()))
@@ -126,8 +134,17 @@ evalStep
   -> Either (PredicateFailure s) (State s)
 evalStep = runRules rules
 
-evalList :: (STS s) => Context s -> State s -> [State s]
-evalList ctx = fmap unwrapRight . takeWhile isRight . iterate (either Left (evalStep ctx)) . return
+evalList :: (STS s) => Context s -> State s -> ([State s], Maybe (PredicateFailure s))
+--evalList ctx = fmap unwrapRight . takeWhile isRight . iterate (either Left (evalStep ctx)) . return
+evalList ctx st = (successes, maybeFailure)
+  where
+    sequence = iterate (either Left (evalStep ctx)) (pure st)
+    successes = fmap unwrapRight $ takeWhile isRight sequence
+    failure = unwrapLeft $ head $ dropWhile isRight sequence
+    maybeFailure = if valueFailure failure then Nothing else Just failure
 
-eval :: (STS s) => Context s -> State s -> State s
-eval ctx = last . evalList ctx
+eval :: (STS s) => Context s -> State s -> Either (PredicateFailure s) (State s)
+--eval ctx = last . fst . evalList ctx
+eval ctx st = maybe (Right (last successes)) Left maybeFailure
+  where
+    (successes, maybeFailure) = evalList ctx st

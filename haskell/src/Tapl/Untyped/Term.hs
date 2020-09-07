@@ -10,6 +10,7 @@ module Tapl.Untyped.Term
   , termFromInteger
   , renderTerm
   , parseTerm
+  , termParser
   , term
   ) where
 

@@ -4,6 +4,7 @@ module Tapl.Util
   , unwrapRight
   , fmapLeft
   , tryEither
+  , (!!?)
   ) where
 
 unwrapMaybe :: Maybe a -> a
@@ -21,3 +22,8 @@ fmapLeft _ (Right a) = Right a
 
 tryEither :: Either a b -> Either a b -> Either a b
 tryEither a b = either (const b) (const a) a
+
+(!!?) :: [a] -> Int -> Maybe a
+[] !!? _ = Nothing
+(a:_) !!? 0 = Just a
+(_:as) !!? n = as !!? (n - 1)
