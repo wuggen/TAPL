@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::collections::HashSet;
+use std::fmt::{self, Display, Formatter};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
@@ -15,6 +16,12 @@ lazy_static! {
     static ref SCRATCH: Mutex<String> = Mutex::new(String::new());
 }
 
+impl Display for Text {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 impl Deref for Text {
     type Target = str;
 
@@ -25,7 +32,13 @@ impl Deref for Text {
 
 impl Borrow<str> for Text {
     fn borrow(&self) -> &str {
-        &*self
+        &self.0
+    }
+}
+
+impl From<&str> for Text {
+    fn from(contents: &str) -> Self {
+        Self::new(contents)
     }
 }
 
