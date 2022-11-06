@@ -69,11 +69,6 @@ impl SymbolSet {
     }
 }
 
-enum DynamicParser {
-    Single(char),
-    Range(char, char),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct SymbolRange(char, char);
 
