@@ -36,9 +36,9 @@ impl Borrow<str> for Text {
     }
 }
 
-impl From<&str> for Text {
-    fn from(contents: &str) -> Self {
-        Self::new(contents)
+impl<S: AsRef<str>> From<S> for Text {
+    fn from(contents: S) -> Self {
+        Self::new(contents.as_ref())
     }
 }
 
