@@ -1,19 +1,25 @@
 use std::cell::{Ref, RefCell, RefMut};
+use std::convert::Infallible;
 use std::ops::{Deref, Range};
 
-pub struct InputStream<T, I> {
-    inner: RefCell<InputStreamInner<I>>,
+pub struct InputStream<'i, T> {
+    inner: RefCell<InputStreamInner<'i, T>>,
     buffer: RefCell<Vec<T>>,
 }
 
-struct InputStreamInner<I> {
-    input: I,
+struct InputStreamInner<'i, T> {
+    input: Box<dyn Iterator<Item = Result<T>> + 'i>,
     cursors: Vec<u32>,
     position: usize,
 }
 
-impl<T, I> InputStream<T, I> {
-    pub fn new(input: I) -> Self {
+impl<'i, T> InputStream<'i, T> {
+    pub fn fallible<I, E>(input: I) -> Self
+    where
+        E: std::error::Error + 'static,
+        I: Iterator<Item = std::result::Result<T, E>> + 'i,
+    {
+        let input = Box::new(input.map(|res| res.map_err(Error::underlying)));
         let inner = RefCell::new(InputStreamInner {
             input,
             cursors: Vec::new(),
@@ -24,20 +30,26 @@ impl<T, I> InputStream<T, I> {
         Self { inner, buffer }
     }
 
+    pub fn new<I>(input: I) -> Self
+    where
+        T: 'i,
+        I: Iterator<Item = T> + 'i,
+    {
+        Self::fallible(input.map(Ok::<_, Infallible>))
+    }
+
     fn buffer_mut(&self) -> Result<RefMut<Vec<T>>> {
         self.buffer
             .try_borrow_mut()
             .map_err(|_| Error::StreamUnavailable)
     }
-}
 
-impl<T, I: Iterator<Item = Result<T>>> InputStream<T, I> {
-    pub fn cursor(&self) -> Cursor<T, I> {
+    pub fn cursor<'s: 'i>(&'s self) -> Cursor<'s, T> {
         let pos = self.inner.borrow().position;
         self.cursor_at(pos)
     }
 
-    fn cursor_at(&self, position: usize) -> Cursor<T, I> {
+    fn cursor_at<'s: 'i>(&'s self, position: usize) -> Cursor<'s, T> {
         let mut inner = self.inner.borrow_mut();
         let offset = position - inner.position;
 
@@ -86,11 +98,7 @@ impl<T, I: Iterator<Item = Result<T>>> InputStream<T, I> {
     /// checks are made to ensure that they are zero.
     ///
     /// Advances the stream position by the lesser of `n` and the remaining symbols in the input.
-    fn drop_n(
-        n: usize,
-        buffer: &mut RefMut<Vec<T>>,
-        inner: &mut RefMut<InputStreamInner<I>>,
-    ) {
+    fn drop_n(n: usize, buffer: &mut RefMut<Vec<T>>, inner: &mut RefMut<InputStreamInner<T>>) {
         let drained = usize::min(n, buffer.len());
         let to_drop = n - drained;
 
@@ -132,23 +140,23 @@ impl<T, I: Iterator<Item = Result<T>>> InputStream<T, I> {
     }
 }
 
-pub struct Cursor<'i, T, I: Iterator<Item = Result<T>>> {
-    stream: &'i InputStream<T, I>,
+pub struct Cursor<'i, T> {
+    stream: &'i InputStream<'i, T>,
     position: usize,
 }
 
-impl<'i, T, I: Iterator<Item = Result<T>>> Drop for Cursor<'i, T, I> {
+impl<'i, T> Drop for Cursor<'i, T> {
     fn drop(&mut self) {
         self.stream.drop_cursor(self.position);
     }
 }
 
-pub struct Lookahead<'i, T> {
-    buffer: Ref<'i, Vec<T>>,
+pub struct Lookahead<'c, T> {
+    buffer: Ref<'c, Vec<T>>,
     range: Range<usize>,
 }
 
-impl<'i, T> Deref for Lookahead<'i, T> {
+impl<'c, T> Deref for Lookahead<'c, T> {
     type Target = [T];
 
     fn deref(&self) -> &Self::Target {
@@ -163,6 +171,19 @@ pub enum Error {
 
     #[error("early end of input")]
     InputExhausted,
+
+    #[error(transparent)]
+    UnderlyingStream {
+        source: Box<dyn std::error::Error + 'static>,
+    },
+}
+
+impl Error {
+    fn underlying<E: std::error::Error + 'static>(source: E) -> Self {
+        Self::UnderlyingStream {
+            source: Box::new(source),
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
