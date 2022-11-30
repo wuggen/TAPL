@@ -18,10 +18,10 @@
 //      (term)
 
 use std::num::ParseIntError;
-use std::ops::ControlFlow::{self, *};
-use std::str::FromStr;
 
 use crate::intern::Text;
+
+use super::syntax::NamedTerm;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Tok {
@@ -32,6 +32,7 @@ pub enum Tok {
     Else,
     OParen,
     CParen,
+    Semicolon,
     Num(u32),
     Ident(Text),
 }
@@ -40,16 +41,6 @@ pub struct Lexer<C> {
     chars: C,
     lookahead: Option<char>,
     buffer: String,
-    state: LexerState,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LexerState {
-    Start,
-    MaybeLineComment,
-    LineComment,
-    Number,
-    Ident,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,6 +50,12 @@ pub enum ParserError {
 
     #[error("trailing characters in input")]
     TrailingInput,
+
+    #[error("early end of input")]
+    Eof,
+
+    #[error("unexpected token {0:?} in input")]
+    UnexpectedToken(Tok),
 
     #[error(transparent)]
     IntegerOverflow { source: ParseIntError },
@@ -81,22 +78,29 @@ where
     pub fn new(mut chars: C) -> Self {
         let lookahead = chars.next();
         let buffer = String::new();
-        let state = LexerState::Start;
         Self {
             chars,
             lookahead,
             buffer,
-            state,
         }
     }
 
-    fn scan(&mut self) -> Option<Result<Tok>> {
-        self.skip_ws();
+    fn scan(&mut self) -> Result<Option<Tok>> {
+        self.skip_ws_and_comments()?;
 
         if let Some(c) = self.lookahead {
-            todo!()
+            match c {
+                '\\' | 'λ' => self.lambda(),
+                '.' => self.dot(),
+                '(' => self.oparen(),
+                ')' => self.cparen(),
+                ';' => self.semicolon(),
+                c if c.is_ascii_digit() => self.num(),
+                c if is_ident_start(c) => self.ident(),
+                c => Err(ParserError::UnexpectedCharacter(c)),
+            }
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -110,193 +114,100 @@ where
         }
     }
 
-    fn ident(&mut self) -> Option<Result<Tok>> {
+    fn skip_line_comment(&mut self) -> Result<()> {
+        if self.lookahead != Some('-') {
+            return Ok(());
+        }
+
+        self.advance();
+
+        if self.lookahead != Some('-') {
+            return Err(ParserError::UnexpectedCharacter('-'));
+        }
+
+        while !matches!(self.lookahead, Some('\n') | None) {
+            self.advance();
+        }
+
+        Ok(())
+    }
+
+    fn skip_ws_and_comments(&mut self) -> Result<()> {
+        while matches!(self.lookahead, Some(c) if c == '-' || c.is_whitespace()) {
+            self.skip_ws();
+            self.skip_line_comment()?;
+        }
+
+        Ok(())
+    }
+
+    fn single_char(&mut self, tok: Tok) -> Result<Option<Tok>> {
+        self.advance();
+        Ok(Some(tok))
+    }
+
+    fn lambda(&mut self) -> Result<Option<Tok>> {
+        self.single_char(Tok::Lambda)
+    }
+
+    fn dot(&mut self) -> Result<Option<Tok>> {
+        self.single_char(Tok::Dot)
+    }
+
+    fn oparen(&mut self) -> Result<Option<Tok>> {
+        self.single_char(Tok::OParen)
+    }
+
+    fn cparen(&mut self) -> Result<Option<Tok>> {
+        self.single_char(Tok::CParen)
+    }
+
+    fn semicolon(&mut self) -> Result<Option<Tok>> {
+        self.single_char(Tok::Semicolon)
+    }
+
+    fn ident(&mut self) -> Result<Option<Tok>> {
         debug_assert!(matches!(self.lookahead, Some(c) if is_ident_start(c)));
 
         self.buffer.clear();
         while let Some(c) = self.lookahead {
             if is_ident_cont(c) {
                 self.buffer.push(c);
+                self.advance();
             } else {
                 break;
             }
         }
 
         match self.buffer.as_ref() {
-            "if" => Some(Ok(Tok::If)),
-            "then" => Some(Ok(Tok::Then)),
-            "else" => Some(Ok(Tok::Else)),
-            ident => Some(Ok(Tok::Ident(Text::new(ident)))),
+            "if" => Ok(Some(Tok::If)),
+            "then" => Ok(Some(Tok::Then)),
+            "else" => Ok(Some(Tok::Else)),
+            ident => Ok(Some(Tok::Ident(Text::new(ident)))),
         }
     }
 
-    fn num(&mut self) -> Option<Result<Tok>> {
+    fn num(&mut self) -> Result<Option<Tok>> {
         debug_assert!(matches!(self.lookahead, Some(c) if c.is_ascii_digit()));
 
         self.buffer.clear();
         while let Some(c) = self.lookahead {
             if c.is_ascii_digit() {
                 self.buffer.push(c);
+                self.advance();
             } else if c.is_alphanumeric() {
-                return Some(Err(ParserError::UnexpectedCharacter(c)));
+                return Err(ParserError::UnexpectedCharacter(c));
             } else {
                 break;
             }
         }
 
-        match u32::from_str(&self.buffer) {
-            Err(source) => Some(Err(ParserError::IntegerOverflow { source })),
-            Ok(n) => Some(Ok(Tok::Num(n))),
-        }
+        let n = self
+            .buffer
+            .parse::<u32>()
+            .map_err(|source| ParserError::IntegerOverflow { source })?;
+        Ok(Some(Tok::Num(n)))
     }
-
-    //fn advance(&mut self) {
-    //    self.lookahead = self.chars.next();
-    //}
-
-    //fn skip_ws(&mut self) {
-    //    while let Some(c) = self.lookahead {
-    //        if c.is_whitespace() {
-    //            self.advance();
-    //        } else {
-    //            break;
-    //        }
-    //    }
-    //}
-
-    //fn scan(&mut self) -> Result<Option<Tok>> {
-    //    loop {
-    //        if let Break(res) = match self.state {
-    //            LexerState::Start => self.start(),
-    //            LexerState::MaybeLineComment => self.maybe_line_comment(),
-    //            LexerState::LineComment => self.line_comment(),
-    //            LexerState::Number => self.number(),
-    //            LexerState::Ident => self.ident(),
-    //        } {
-    //            break res;
-    //        }
-    //    }
-    //}
-
-    //fn start(&mut self) -> ControlFlow<Result<Option<Tok>>> {
-    //    debug_assert_eq!(self.state, LexerState::Start);
-    //    self.skip_ws();
-
-    //    match self.lookahead {
-    //        None => Break(Ok(None)),
-
-    //        Some('-') => {
-    //            self.state = LexerState::MaybeLineComment;
-    //            Continue(())
-    //        }
-
-    //        Some('\\') => {
-    //            self.advance();
-    //            Break(Ok(Some(Tok::Lambda)))
-    //        }
-
-    //        Some('.') => {
-    //            self.advance();
-    //            Break(Ok(Some(Tok::Dot)))
-    //        }
-
-    //        Some('(') => {
-    //            self.advance();
-    //            Break(Ok(Some(Tok::OParen)))
-    //        }
-
-    //        Some(')') => {
-    //            self.advance();
-    //            Break(Ok(Some(Tok::CParen)))
-    //        }
-
-    //        Some(c) if c.is_ascii_digit() => {
-    //            self.state = LexerState::Number;
-    //            Continue(())
-    //        }
-
-    //        Some(c) if c.is_alphabetic() || c == '_' => {
-    //            self.state = LexerState::Ident;
-    //            Continue(())
-    //        }
-
-    //        Some(c) => Break(Err(ParserError::UnexpectedCharacter(c))),
-    //    }
-    //}
-
-    //fn maybe_line_comment(&mut self) -> ControlFlow<Result<Option<Tok>>> {
-    //    debug_assert_eq!(self.lookahead, Some('-'));
-    //    self.advance();
-    //    match self.lookahead {
-    //        None => Break(Err(ParserError::UnexpectedCharacter('_'))),
-    //        Some('-') => {
-    //            self.state = LexerState::LineComment;
-    //            Continue(())
-    //        }
-    //        Some(_) => Break(Err(ParserError::UnexpectedCharacter('-'))),
-    //    }
-    //}
-
-    //fn line_comment(&mut self) -> ControlFlow<Result<Option<Tok>>> {
-    //    while let Some(c) = self.lookahead {
-    //        if c == '\n' {
-    //            break;
-    //        } else {
-    //            self.advance();
-    //        }
-    //    }
-
-    //    self.state = LexerState::Start;
-    //    Continue(())
-    //}
-
-    //fn number(&mut self) -> ControlFlow<Result<Option<Tok>>> {
-    //    debug_assert_eq!(self.state, LexerState::Number);
-    //    debug_assert!(matches!(self.lookahead, Some(c) if c.is_ascii_digit()));
-
-    //    while let Some(c) = self.lookahead {
-    //        if c.is_ascii_digit() {
-    //            self.buffer.push(c);
-    //            self.advance();
-    //        } else {
-    //            break;
-    //        }
-    //    }
-
-    //    self.state = LexerState::Start;
-    //    let val = u32::from_str_radix(&self.buffer, 10).unwrap();
-    //    self.buffer.clear();
-    //    Break(Ok(Some(Tok::Num(val))))
-    //}
-
-    //fn ident(&mut self) -> ControlFlow<Result<Option<Tok>>> {
-    //    debug_assert_eq!(self.state, LexerState::Ident);
-    //    debug_assert!(matches!(self.lookahead, Some(c) if c.is_alphabetic() || c == '_'));
-
-    //    while let Some(c) = self.lookahead {
-    //        if c.is_alphanumeric() || c == '_' || c == '\'' {
-    //            self.buffer.push(c);
-    //            self.advance();
-    //        } else {
-    //            break;
-    //        }
-    //    }
-
-    //    self.state = LexerState::Start;
-
-    //    let tok = match self.buffer.as_ref() {
-    //        "if" => Tok::If,
-    //        "then" => Tok::Then,
-    //        "else" => Tok::Else,
-    //        s => {
-    //            let val = Text::from(s);
-    //            Tok::Ident(val)
-    //        }
-    //    };
-
-    //    self.buffer.clear();
-    //    Break(Ok(Some(tok)))
-    //}
 }
 
 impl<C> Iterator for Lexer<C>
@@ -306,12 +217,13 @@ where
     type Item = Result<Tok>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.scan()
+        self.scan().transpose()
     }
 }
 
 pub struct Parser<C> {
     lexer: Lexer<C>,
+    lookahead: Option<Tok>,
 }
 
 #[allow(dead_code)]
@@ -319,9 +231,54 @@ impl<C> Parser<C>
 where
     C: Iterator<Item = char>,
 {
-    pub fn new(chars: C) -> Self {
-        let lexer = Lexer::new(chars);
-        Self { lexer }
+    pub fn new(chars: C) -> Result<Self> {
+        let mut lexer = Lexer::new(chars);
+        let lookahead = lexer.next().transpose()?;
+        Ok(Self { lexer, lookahead })
+    }
+
+    fn advance(&mut self) -> Result<()> {
+        self.lookahead = self.lexer.next().transpose()?;
+        Ok(())
+    }
+
+    fn match_one(&mut self, expected: Tok) -> Result<()> {
+        if let Some(tok) = self.lookahead.clone() {
+            if tok != expected {
+                Err(ParserError::UnexpectedToken(tok))
+            } else {
+                self.advance()?;
+                Ok(())
+            }
+        } else {
+            Err(ParserError::Eof)
+        }
+    }
+
+    fn term(&mut self) -> Result<Option<NamedTerm>> {
+        match self.lookahead.clone() {
+            None => Ok(None),
+            Some(Tok::Lambda) => self.abstraction(),
+            Some(Tok::If) => self.if_then_else(),
+            Some(Tok::Ident(_) | Tok::Num(_) | Tok::OParen) => self.applist(),
+            Some(tok) => Err(ParserError::UnexpectedToken(tok)),
+        }
+    }
+
+    fn abstraction(&mut self) -> Result<Option<NamedTerm>> {
+        todo!()
+    }
+
+    fn if_then_else(&mut self) -> Result<Option<NamedTerm>> {
+        todo!()
+    }
+
+    fn applist(&mut self) -> Result<Option<NamedTerm>> {
+        todo!()
+    }
+
+    fn atom(&mut self) -> Result<Option<NamedTerm>> {
+        todo!()
     }
 }
 

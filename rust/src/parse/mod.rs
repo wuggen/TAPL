@@ -1,343 +1,215 @@
-use std::cell::{Ref, RefCell, RefMut};
-use std::convert::Infallible;
-use std::ops::{Deref, Range};
+pub trait Parser<'i> {
+    type Output;
 
-pub struct InputStream<'i, T> {
-    inner: RefCell<InputStreamInner<'i, T>>,
-    buffer: RefCell<Vec<T>>,
-}
+    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output>;
 
-struct InputStreamInner<'i, T> {
-    input: Box<dyn Iterator<Item = Result<T>> + 'i>,
-    cursors: Vec<u32>,
-    position: usize,
-}
-
-impl<'i, T> InputStream<'i, T> {
-    pub fn fallible<I, E>(input: I) -> Self
+    fn both<P: Parser<'i>>(self, other: P) -> Both<Self, P>
     where
-        E: std::error::Error + 'static,
-        I: Iterator<Item = std::result::Result<T, E>> + 'i,
+        Self: Sized,
     {
-        let input = Box::new(input.map(|res| res.map_err(Error::underlying)));
-        let inner = RefCell::new(InputStreamInner {
-            input,
-            cursors: Vec::new(),
-            position: 0,
-        });
-        let buffer = RefCell::new(Vec::new());
-
-        Self { inner, buffer }
+        Both { p: self, q: other }
     }
 
-    pub fn new<I>(input: I) -> Self
+    fn then<P: Parser<'i>>(self, other: P) -> Then<Self, P>
     where
-        T: 'i,
-        I: Iterator<Item = T> + 'i,
+        Self: Sized,
     {
-        Self::fallible(input.map(Ok::<_, Infallible>))
-    }
-
-    fn buffer_mut(&self) -> Result<RefMut<Vec<T>>> {
-        self.buffer
-            .try_borrow_mut()
-            .map_err(|_| Error::StreamUnavailable)
-    }
-
-    pub fn cursor<'s: 'i>(&'s self) -> Cursor<'s, T> {
-        let pos = self.inner.borrow().position;
-        self.cursor_at(pos)
-    }
-
-    fn cursor_at<'s: 'i>(&'s self, position: usize) -> Cursor<'s, T> {
-        let mut inner = self.inner.borrow_mut();
-        let offset = position - inner.position;
-
-        if inner.cursors.len() <= offset {
-            inner.cursors.resize(offset + 1, 0);
-        }
-
-        inner.cursors[offset] += 1;
-
-        Cursor {
-            stream: self,
-            position,
+        Then {
+            inner: self.both(other),
         }
     }
 
-    /// Ensure that the buffer contains all symbols from the current stream position (inclusive) to
-    /// the given stream position (exclusive).
-    ///
-    /// If sufficient symbols are already buffered, this is a no-op.
-    fn buffer_to_position(&self, position: usize) -> Result<()> {
-        let mut inner = self.inner.borrow_mut();
-        debug_assert!(position >= inner.position);
+    fn or<P: Parser<'i, Output = Self::Output>>(self, other: P) -> Or<Self, P>
+    where
+        Self: Sized,
+    {
+        Or { p: self, q: other }
+    }
 
-        let mut buffer = self.buffer_mut()?;
+    fn map<F>(self, f: F) -> Map<Self, F>
+    where
+        Self: Sized,
+    {
+        Map { p: self, f }
+    }
 
-        let n = position - inner.position;
-        buffer.reserve(n);
+    fn repeat(self, n: usize) -> Repeat<Self>
+    where
+        Self: Sized,
+    {
+        Repeat { p: self, n }
+    }
 
-        for _ in 0..n {
-            if let Some(res) = inner.input.next() {
-                buffer.push(res?);
-            } else {
-                return Err(Error::InputExhausted);
-            }
+    fn many(self) -> Many<Self>
+    where
+        Self: Sized,
+    {
+        Many(self)
+    }
+
+    fn optional(self) -> Optional<Self>
+    where
+        Self: Sized,
+    {
+        Optional(self)
+    }
+}
+
+pub struct Both<P, Q> {
+    p: P,
+    q: Q,
+}
+
+impl<'i, P: Parser<'i>, Q: Parser<'i>> Parser<'i> for Both<P, Q> {
+    type Output = (P::Output, Q::Output);
+
+    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+        let (p_out, rem) = self.p.parse(input)?;
+        let (q_out, rem) = self.q.parse(rem)?;
+        let out = (p_out, q_out);
+        Ok((out, rem))
+    }
+}
+
+pub struct Then<P, Q> {
+    inner: Both<P, Q>,
+}
+
+impl<'i, P: Parser<'i>, Q: Parser<'i>> Parser<'i> for Then<P, Q> {
+    type Output = Q::Output;
+
+    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+        let ((_, out), rem) = self.inner.parse(input)?;
+        Ok((out, rem))
+    }
+}
+
+pub struct Or<P, Q> {
+    p: P,
+    q: Q,
+}
+
+impl<'i, P, Q> Parser<'i> for Or<P, Q>
+where
+    P: Parser,
+    Q: Parser<Output = P::Output>,
+{
+    type Output = P::Output;
+
+    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+        self.p.parse(input).or_else(|_| self.q.parse(input))
+    }
+}
+
+pub struct Map<P, F> {
+    p: P,
+    f: F,
+}
+
+impl<'i, P, F, T> Parser<'i> for Map<P, F>
+where
+    P: Parser,
+    F: Fn(P::Output) -> T,
+{
+    type Output = T;
+
+    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+        let (res, rem) = self.p.parse(input)?;
+        let out = (self.f)(res);
+        Ok((out, rem))
+    }
+}
+
+pub struct Repeat<P> {
+    p: P,
+    n: usize,
+}
+
+impl<'i, P: Parser<'i>> Parser<'i> for Repeat<P> {
+    type Output = Vec<P::Output>;
+
+    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+        let mut rem = input;
+        let mut out = Vec::with_capacity(self.n);
+
+        for _ in 0..self.n {
+            let (item, r) = self.p.parse(rem)?;
+            rem = r;
+            out.push(item);
         }
 
-        Ok(())
+        Ok((out, rem))
     }
+}
 
-    /// Drop the first at most `n` symbols from the buffer.
-    ///
-    /// If there are fewer than `n` symbols in the buffer, this will advance the input iterator by
-    /// the remaining amount, and discard the yielded items.
-    ///
-    /// Additionally, this will drop the first at most `n` cursors from the cursor buffer. No
-    /// checks are made to ensure that they are zero.
-    ///
-    /// Advances the stream position by the lesser of `n` and the remaining symbols in the input.
-    fn drop_n(n: usize, buffer: &mut RefMut<Vec<T>>, inner: &mut RefMut<InputStreamInner<T>>) {
-        let drained = usize::min(n, buffer.len());
-        let to_drop = n - drained;
+pub struct Many<P>(P);
 
-        buffer.drain(0..drained);
-        let dropped = (&mut inner.input).skip(to_drop).count();
+impl<'i, P: Parser<'i>> Parser<'i> for Many<P> {
+    type Output = Vec<P::Output>;
 
-        let cursors_drained = usize::min(n, inner.cursors.len());
-        inner.cursors.drain(0..cursors_drained);
+    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+        let mut rem = input;
+        let mut out = Vec::new();
 
-        inner.position += drained + dropped;
+        while let Ok((item, r)) = self.0.parse(rem) {
+            rem = r;
+            out.push(item);
+        }
+
+        Ok((out, rem))
     }
+}
 
-    /// Drop a cursor at the given stream position.
-    ///
-    /// This decrements the number of cursors at that position. If this results in there being at
-    /// least one symbol at the current stream position with no cursors:
-    ///
-    /// - If there is at least one other cursor to this stream, all symbols up to the next cursor
-    ///   will be dropped, including any that have not yet been buffered, advancing the stream
-    ///   position to the position of the next cursor.
-    /// - If there are no more cursors, the buffer and the stream position will remain unchanged.
-    fn drop_cursor(&self, position: usize) {
-        let mut inner = self.inner.borrow_mut();
-        debug_assert!(position >= inner.position);
-        let offset = position - inner.position;
-        debug_assert!(offset < inner.cursors.len());
-        debug_assert!(inner.cursors[offset] > 0);
+pub struct Optional<P>(P);
 
-        inner.cursors[offset] -= 1;
+impl<'i, P: Parser<'i>> Parser<'i> for Optional<P> {
+    type Output = Option<P::Output>;
 
-        if let Ok(mut buffer) = self.buffer_mut() {
-            let n = inner
-                .cursors
-                .iter()
-                .position(|n| *n > 0)
-                .unwrap_or_else(|| inner.cursors.len());
-            Self::drop_n(n, &mut buffer, &mut inner);
+    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+        self.0
+            .parse(input)
+            .map(|(out, rem)| (Some(out), rem))
+            .or(Ok((None, input)))
+    }
+}
+
+impl<'i, F, T> Parser<'i> for F
+where
+    F: Fn(&'i str) -> IResult<'i, T>,
+{
+    type Output = T;
+
+    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+        self(input)
+    }
+}
+
+pub fn one<'i>(c: char) -> impl Parser<'i, Output = ()> {
+    move |input: &'i str| -> IResult<'i, _> {
+        let (i, sym) = input.char_indices().next().ok_or(Error::InputExhausted)?;
+        if sym == c {
+            let n = sym.len_utf8();
+            let rem = input.split_at(i + n).1;
+            Ok(((), rem))
+        } else {
+            Err(Error::UnexpectedChar(sym))
         }
     }
 }
 
-pub struct Cursor<'i, T> {
-    stream: &'i InputStream<'i, T>,
-    position: usize,
-}
-
-impl<'i, T> Drop for Cursor<'i, T> {
-    fn drop(&mut self) {
-        self.stream.drop_cursor(self.position);
-    }
-}
-
-pub struct Lookahead<'c, T> {
-    buffer: Ref<'c, Vec<T>>,
-    range: Range<usize>,
-}
-
-impl<'c, T> Deref for Lookahead<'c, T> {
-    type Target = [T];
-
-    fn deref(&self) -> &Self::Target {
-        &self.buffer[self.range.clone()]
-    }
+pub fn literal<'i>(lit: &str) -> impl Parser<'i, Output = &'i str> {
+    todo!()
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("the input buffer is currently borrowed; cannot modify")]
-    StreamUnavailable,
-
     #[error("early end of input")]
     InputExhausted,
 
-    #[error(transparent)]
-    UnderlyingStream {
-        source: Box<dyn std::error::Error + 'static>,
-    },
-}
-
-impl Error {
-    fn underlying<E: std::error::Error + 'static>(source: E) -> Self {
-        Self::UnderlyingStream {
-            source: Box::new(source),
-        }
-    }
+    #[error("unexpected character {0:?} in input")]
+    UnexpectedChar(char),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-//use std::collections::VecDeque;
-//use std::ops::RangeInclusive;
-//
-//mod internal;
-//
-//pub struct ParserInput<T> {
-//    input: Box<dyn Iterator<Item = T>>,
-//    lookahead: VecDeque<T>,
-//}
-//
-//impl<T> ParserInput<T> {
-//    pub fn new<I>(input: I) -> Self
-//    where
-//        I: IntoIterator<Item = T>,
-//        I::IntoIter: 'static,
-//    {
-//        let input = Box::new(input.into_iter().fuse());
-//        let lookahead = VecDeque::new();
-//        Self { input, lookahead }
-//    }
-//
-//    /// Look ahead `n` symbols in the input.
-//    ///
-//    /// This does not advance the input. Subsequent calls to `lookahead_n` without intervening
-//    /// advances will contain the returned slice as as a prefix (if called with greater `n`) or
-//    /// will be prefixes of the returned slice (if called with lesser `n`).
-//    ///
-//    /// Returns a slice of length at most `n`. The length will be shorter if the remaining input is
-//    /// shorter than `n`.
-//    pub fn lookahead_n(&mut self, n: usize) -> &[T] {
-//        if self.lookahead.len() < n {
-//            self.lookahead_additional(n - self.lookahead.len());
-//        }
-//
-//        let actual = usize::min(n, self.lookahead.len());
-//        &self.lookahead.make_contiguous()[0..actual]
-//    }
-//
-//    /// Advance the input `n` symbols.
-//    ///
-//    /// Returns the symbols advanced over. This may be less than `n` if the remaining input is
-//    /// shorter than `n`.
-//    pub fn advance_n(&mut self, n: usize) -> Vec<T> {
-//        let already_buffered = usize::min(n, self.lookahead.len());
-//        let additional_needed = n - already_buffered;
-//
-//        let mut syms: Vec<T> = self.lookahead.drain(0..already_buffered).collect();
-//
-//        for _ in 0..additional_needed {
-//            if let Some(sym) = self.input.next() {
-//                syms.push(sym);
-//            } else {
-//                break;
-//            }
-//        }
-//
-//        syms
-//    }
-//
-//    /// Look ahead at the next symbol in the input.
-//    ///
-//    /// This does not advance the input. Subsequent calls to `lookahead` without intervening
-//    /// advances will return the same symbol.
-//    pub fn lookahead(&mut self) -> Option<&T> {
-//        if self.lookahead.is_empty() {
-//            self.lookahead_additional(1);
-//        }
-//        self.lookahead.get(0)
-//    }
-//
-//    /// Advance the input one symbol.
-//    pub fn advance(&mut self) -> Option<T> {
-//        if self.lookahead.is_empty() {
-//            self.input.next()
-//        } else {
-//            self.lookahead.pop_front()
-//        }
-//    }
-//}
-//
-//impl<T> ParserInput<T>
-//where
-//    T: Eq,
-//{
-//    /// Attempts to advance over one symbol equal to an expected symbol.
-//    ///
-//    /// If the input is empty, or if the next symbol is not equal to the expected symbol, returns
-//    /// `None` and does not advance the input. Otherwise, advances the input by one symbol and
-//    /// returns the extracted symbol.
-//    pub fn one(&mut self, expected: &T) -> Option<T> {
-//        if let Some(t) = self.lookahead() {
-//            if t == expected {
-//                self.advance()
-//            } else {
-//                None
-//            }
-//        } else {
-//            None
-//        }
-//    }
-//
-//    /// Attempts to advance over as many symbols equal to the expected symbol as possible.
-//    ///
-//    /// Advances the input by as many symbols equal to `expected` are encountered. Returns a vec of
-//    /// all extracted symbols.
-//    pub fn many(&mut self, expected: &T) -> Vec<T> {
-//        let mut syms = Vec::new();
-//        while let Some(t) = self.lookahead() {
-//            if t == expected {
-//                syms.push(self.advance().unwrap());
-//            } else {
-//                break;
-//            }
-//        }
-//        syms
-//    }
-//}
-//
-//impl<T> ParserInput<T>
-//where
-//    T: Ord,
-//{
-//    /// Attempts to advance over one symbol in the given range.
-//    ///
-//    /// If the input is empty, or if the next symbol is not within the given range, returns `None`
-//    /// and does not advance the input. Otherwise, advances the input by one symbol and returns the
-//    /// extracted symbol.
-//    pub fn one_in_range(&mut self, expected: RangeInclusive<T>) -> Option<T> {
-//        if let Some(t) = self.lookahead() {
-//            todo!()
-//        } else {
-//            None
-//        }
-//    }
-//}
-//
-//impl<T> ParserInput<T> {
-//    /// Advance the input by `amount` items, appending them to the lookahead buffer.
-//    ///
-//    /// Returns the number of items actually appended. This will be less than `amount` if the input
-//    /// contains fewer than `amount` additional symbols.
-//    fn lookahead_additional(&mut self, amount: usize) -> usize {
-//        for n in 0..amount {
-//            if let Some(item) = self.input.next() {
-//                self.lookahead.push_back(item);
-//            } else {
-//                return n;
-//            }
-//        }
-//
-//        amount
-//    }
-//}
+pub type IResult<'i, T> = Result<(T, &'i str)>;
