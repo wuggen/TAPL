@@ -17,7 +17,7 @@
 //      num
 //      (term)
 
-use std::num::ParseIntError;
+//use std::num::ParseIntError;
 
 use crate::intern::Text;
 use crate::parse::prelude::*;
@@ -56,24 +56,99 @@ fn term_from_int(n: u32) -> NamedTerm {
     term
 }
 
-fn ident<'i>() -> impl Parser<'i, Output = Text> {
-    predicate(is_ident_start)
-        .sequence(extract_while(is_ident_cont).optional())
-        .consumed()
-        .map(|s| Ok(Text::new(s)))
-}
-
-fn num<'i>() -> impl Parser<'i, Output = NamedTerm> {
-    integer(10).map_from_str().map(|n| Ok(term_from_int(n)))
-}
-
-fn atom<'i>() -> impl Parser<'i, Output = NamedTerm> {
-    todo!()
-}
-
-fn applist<'i>() -> impl Parser<'i, Output = NamedTerm> {
-    todo!()
-}
+//fn ident() -> impl for<'i> Parser<Output<'i> = Text> {
+//    whitespace().seq_second(
+//        predicate(is_ident_start)
+//            .sequence(extract_while(is_ident_cont).optional())
+//            .consumed()
+//            .map(Text::new),
+//    )
+//}
+//
+//fn var_or_const() -> impl for<'i> Parser<Output<'i> = NamedTerm> {
+//    ident().map(|t| match t.as_ref() {
+//        "true" => NamedTerm::true_(),
+//        "false" => NamedTerm::false_(),
+//        name => NamedTerm::var(name),
+//    })
+//}
+//
+//fn num() -> impl for<'i> Parser<Output<'i> = NamedTerm> {
+//    whitespace().seq_second(integer(10).map_from_str().map(term_from_int))
+//}
+//
+//fn atom() -> impl for<'i> Parser<Output<'i> = NamedTerm> {
+//    let paren_term = whitespace().seq_second(
+//        one('(')
+//            .seq_second(term)
+//            .seq_first(whitespace())
+//            .seq_first(one(')')),
+//    );
+//
+//    paren_term.alternate(num()).alternate(var_or_const())
+//}
+//
+//fn applist() -> impl for<'i> Parser<Output<'i> = NamedTerm> {
+//    atom().many().map(|terms| {
+//        let mut terms = terms.into_iter();
+//        let term = terms.next().unwrap();
+//        terms.fold(term, |f, x| match &f {
+//            NamedTerm::Var { name } => {
+//                if name == "succ" {
+//                    NamedTerm::succ(x)
+//                } else if name == "pred" {
+//                    NamedTerm::pred(x)
+//                } else if name == "iszero" {
+//                    NamedTerm::iszero(x)
+//                } else {
+//                    NamedTerm::app(f, x)
+//                }
+//            }
+//            _ => NamedTerm::app(f, x),
+//        })
+//    })
+//}
+//
+//fn abstr() -> impl for<'i> Parser<Output<'i> = NamedTerm> {
+//    whitespace().seq_second(
+//        one('\\')
+//            .alternate(one('λ'))
+//            .sequence(whitespace())
+//            .seq_second(ident())
+//            .seq_first(whitespace().sequence(one('.')).sequence(whitespace()))
+//            .sequence(term)
+//            .map(|(v, t)| NamedTerm::binding(v, t)),
+//    )
+//}
+//
+//fn if_then_else() -> impl for<'i> Parser<Output<'i> = NamedTerm> {
+//    whitespace().seq_second(
+//        literal("if")
+//            .sequence(whitespace())
+//            .seq_second(term)
+//            .seq_first(
+//                whitespace()
+//                    .sequence(literal("then"))
+//                    .sequence(whitespace()),
+//            )
+//            .sequence(term)
+//            .seq_first(
+//                whitespace()
+//                    .sequence(literal("else"))
+//                    .sequence(whitespace()),
+//            )
+//            .sequence(term)
+//            .map(|((i, t), e)| NamedTerm::ite(i, t, e)),
+//    )
+//}
+//
+//fn term() -> impl for<'i> Parser<Output<'i> = NamedTerm> {
+//    applist().alternate(abstr()).alternate(if_then_else())
+//}
+//
+//pub fn term_parser() -> impl for<'i> Parser<Output<'i> = NamedTerm> {
+//    term()
+//}
 
 //pub struct Lexer<C> {
 //    chars: C,
@@ -408,3 +483,16 @@ fn applist<'i>() -> impl Parser<'i, Output = NamedTerm> {
 //        assert!(matches!(err, ParserError::UnexpectedCharacter('-')));
 //    }
 //}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn ident_parser() {
+        let input = "horble dorble";
+        let (text, _) = ident.parse(input).unwrap();
+        println!("Parsed ident {}", text);
+        assert_eq!(text, "horble");
+    }
+}

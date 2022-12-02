@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::str::FromStr;
 
@@ -9,51 +10,50 @@ pub mod prelude {
 }
 
 /// Composable parsers.
-pub trait Parser<'i> {
+pub trait Parser {
     /// The type parsed by this `Parser`.
-    type Output;
+    type Output<'i>;
 
     /// Attempt to parse a `Self::Output` from the given string.
     ///
     /// This returns an [`IResult`], a typedef for a `Result` that, when `Ok`, returns the
     /// remaining unconsumed portion of the input.
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output>;
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>>;
 
-    /// Construct a parser that will run this parser and the `other` in sequence.
-    ///
-    /// The returned parser will output both this and the `other`'s outputs.
-    fn sequence<P: Parser<'i>>(self, other: P) -> Sequence<Self, P>
+    fn ignore(self) -> Ignore<Self>
     where
         Self: Sized,
     {
-        Sequence { p: self, q: other }
+        Ignore(self)
     }
 
-    /// Construct a parser that will run this one and return only the first result.
-    ///
-    /// This is useful after calling [`Parser::sequence`] when only the output of the first parser
-    /// is required.
-    fn first(self) -> First<Self>
+    fn then<P: Parser>(self, other: P) -> Then<Self, P>
     where
         Self: Sized,
     {
-        First(self)
+        Then(self, other)
     }
 
-    /// Cosntruct a parser that will run this one and return only the second result.
-    ///
-    /// This is useful after calling [`Parser::sequence`] when only the output of the second parser
-    /// is required.
-    fn second(self) -> Second<Self>
+    fn then_ignore<P: Parser>(self, other: P) -> ThenIgnore<Self, P>
     where
         Self: Sized,
     {
-        Second(self)
+        ThenIgnore(self.then(other))
+    }
+
+    fn ignore_then<P: Parser>(self, other: P) -> IgnoreThen<Self, P>
+    where
+        Self: Sized,
+    {
+        IgnoreThen(self.then(other))
     }
 
     /// Construct a parser that will try this parser and then the `other`, returning whichever
     /// succeeds.
-    fn alternate<P: Parser<'i, Output = Self::Output>>(self, other: P) -> Alternate<Self, P>
+    fn alternate<P: for<'i> Parser<Output<'i> = Self::Output<'i>>>(
+        self,
+        other: P,
+    ) -> Alternate<Self, P>
     where
         Self: Sized,
     {
@@ -64,9 +64,17 @@ pub trait Parser<'i> {
     fn map<F, T>(self, f: F) -> Map<Self, F>
     where
         Self: Sized,
-        F: Fn(Self::Output) -> Result<T>,
+        F: for<'i> Fn(Self::Output<'i>) -> T,
     {
         Map { p: self, f }
+    }
+
+    fn try_map<F, T>(self, f: F) -> TryMap<Self, F>
+    where
+        Self: Sized,
+        F: for<'i> Fn(Self::Output<'i>) -> Result<T>,
+    {
+        TryMap(self.map(f))
     }
 
     /// Construct a parser that will run this parser and, if it fails, apply the given function to
@@ -126,58 +134,58 @@ pub trait Parser<'i> {
             _t: PhantomData,
         }
     }
-}
 
-/// A parser that sequences two parsers.
-///
-/// Constructed via the [`Parser::sequence`] method.
-pub struct Sequence<P, Q> {
-    p: P,
-    q: Q,
-}
-
-impl<'i, P: Parser<'i>, Q: Parser<'i>> Parser<'i> for Sequence<P, Q> {
-    type Output = (P::Output, Q::Output);
-
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
-        let (p_out, rem) = self.p.parse(input)?;
-        let (q_out, rem) = self.q.parse(rem)?;
-        let out = (p_out, q_out);
-        Ok((out, rem))
+    /// Construct a parser that will run this one and fail if there is any remaining input.
+    fn strict(self) -> Strict<Self>
+    where
+        Self: Sized,
+    {
+        Strict(self)
     }
 }
 
-/// A parser that discards its second result and returns only the first.
-///
-/// Cosntructed via the [`Parser::first`] method.
-pub struct First<P>(P);
+pub struct Ignore<P>(P);
 
-impl<'i, P, A, B> Parser<'i> for First<P>
-where
-    P: Parser<'i, Output = (A, B)>,
-{
-    type Output = A;
+impl<P: Parser> Parser for Ignore<P> {
+    type Output<'i> = ();
 
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
-        let ((a, _), rem) = self.0.parse(input)?;
-        Ok((a, rem))
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
+        let (_, rem) = self.0.parse(input)?;
+        Ok(((), rem))
     }
 }
 
-/// A parser that discards its first result and returns only the second.
-///
-/// Constructed via the [`Parser::second`] method.
-pub struct Second<P>(P);
+pub struct Then<P, Q>(P, Q);
 
-impl<'i, P, A, B> Parser<'i> for Second<P>
-where
-    P: Parser<'i, Output = (A, B)>,
-{
-    type Output = B;
+impl<P: Parser, Q: Parser> Parser for Then<P, Q> {
+    type Output<'i> = (P::Output<'i>, Q::Output<'i>);
 
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
-        let ((_, b), rem) = self.0.parse(input)?;
-        Ok((b, rem))
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
+        let (p, rem) = self.0.parse(input)?;
+        let (q, rem) = self.1.parse(rem)?;
+        Ok(((p, q), rem))
+    }
+}
+
+pub struct ThenIgnore<P, Q>(Then<P, Q>);
+
+impl<P: Parser, Q: Parser> Parser for ThenIgnore<P, Q> {
+    type Output<'i> = P::Output<'i>;
+
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
+        let ((p, _), rem) = self.0.parse(input)?;
+        Ok((p, rem))
+    }
+}
+
+pub struct IgnoreThen<P, Q>(Then<P, Q>);
+
+impl<P: Parser, Q: Parser> Parser for IgnoreThen<P, Q> {
+    type Output<'i> = Q::Output<'i>;
+
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
+        let ((_, q), rem) = self.0.parse(input)?;
+        Ok((q, rem))
     }
 }
 
@@ -189,14 +197,14 @@ pub struct Alternate<P, Q> {
     q: Q,
 }
 
-impl<'i, P, Q> Parser<'i> for Alternate<P, Q>
+impl<P, Q> Parser for Alternate<P, Q>
 where
-    P: Parser<'i>,
-    Q: Parser<'i, Output = P::Output>,
+    P: Parser,
+    Q: for<'i> Parser<Output<'i> = P::Output<'i>>,
 {
-    type Output = P::Output;
+    type Output<'i> = P::Output<'i>;
 
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
         self.p.parse(input).or_else(|_| self.q.parse(input))
     }
 }
@@ -209,17 +217,31 @@ pub struct Map<P, F> {
     f: F,
 }
 
-impl<'i, P, F, T> Parser<'i> for Map<P, F>
+impl<P, F, T> Parser for Map<P, F>
 where
-    P: Parser<'i>,
-    F: Fn(P::Output) -> Result<T>,
+    P: Parser,
+    F: for<'i> Fn(P::Output<'i>) -> T,
 {
-    type Output = T;
+    type Output<'i> = T;
 
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
         let (res, rem) = self.p.parse(input)?;
-        let out = (self.f)(res)?;
-        Ok((out, rem))
+        Ok(((self.f)(res), rem))
+    }
+}
+
+pub struct TryMap<P, F>(Map<P, F>);
+
+impl<P, F, T> Parser for TryMap<P, F>
+where
+    P: Parser,
+    F: for<'i> Fn(P::Output<'i>) -> Result<T>,
+{
+    type Output<'i> = T;
+
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
+        let (res, rem) = self.0.parse(input)?;
+        Ok((res?, rem))
     }
 }
 
@@ -231,15 +253,15 @@ pub struct MapFromStr<P, T> {
     _t: PhantomData<T>,
 }
 
-impl<'i, P, T> Parser<'i> for MapFromStr<P, T>
+impl<P, T> Parser for MapFromStr<P, T>
 where
-    P: Parser<'i>,
+    P: Parser,
     T: FromStr,
     T::Err: std::error::Error + 'static,
 {
-    type Output = T;
+    type Output<'i> = T;
 
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
         let (consumed, rem) = self.p.parse(input)?;
         let out = T::from_str(consumed).map_err(Error::custom)?;
         Ok((out, rem))
@@ -254,14 +276,14 @@ pub struct MapError<P, F> {
     f: F,
 }
 
-impl<'i, P, F> Parser<'i> for MapError<P, F>
+impl<P, F> Parser for MapError<P, F>
 where
-    P: Parser<'i>,
+    P: Parser,
     F: Fn(Error) -> Error,
 {
-    type Output = P::Output;
+    type Output<'i> = P::Output<'i>;
 
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
         self.p.parse(input).map_err(&self.f)
     }
 }
@@ -274,10 +296,10 @@ pub struct Repeat<P> {
     n: usize,
 }
 
-impl<'i, P: Parser<'i>> Parser<'i> for Repeat<P> {
-    type Output = Vec<P::Output>;
+impl<P: Parser> Parser for Repeat<P> {
+    type Output<'i> = Vec<P::Output<'i>>;
 
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
         let mut rem = input;
         let mut out = Vec::with_capacity(self.n);
 
@@ -296,10 +318,13 @@ impl<'i, P: Parser<'i>> Parser<'i> for Repeat<P> {
 /// Constructed via the [`Parser::many`] method.
 pub struct Many<P>(P);
 
-impl<'i, P: Parser<'i>> Parser<'i> for Many<P> {
-    type Output = Vec<P::Output>;
+impl<P: Parser> Parser for Many<P>
+where
+    for<'i> P::Output<'i>: Debug,
+{
+    type Output<'i> = Vec<P::Output<'i>>;
 
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
         let (first, mut rem) = self.0.parse(input)?;
         let mut out = vec![first];
 
@@ -317,10 +342,10 @@ impl<'i, P: Parser<'i>> Parser<'i> for Many<P> {
 /// Constructed via the [`Parser::optional`] method.
 pub struct Optional<P>(P);
 
-impl<'i, P: Parser<'i>> Parser<'i> for Optional<P> {
-    type Output = Option<P::Output>;
+impl<P: Parser> Parser for Optional<P> {
+    type Output<'i> = Option<P::Output<'i>>;
 
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
         self.0
             .parse(input)
             .map(|(out, rem)| (Some(out), rem))
@@ -333,26 +358,65 @@ impl<'i, P: Parser<'i>> Parser<'i> for Optional<P> {
 /// Constructed via the [`Parser::consumed`] method.
 pub struct Consumed<P>(P);
 
-impl<'i, P: Parser<'i>> Parser<'i> for Consumed<P> {
-    type Output = &'i str;
+impl<P: Parser> Parser for Consumed<P> {
+    type Output<'i> = &'i str;
 
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
         let (_, rem) = self.0.parse(input)?;
         let diff = input.len() - rem.len();
-        let (consumed, _) = input.split_at(diff);
-        debug_assert_eq!(consumed.to_owned() + rem, input);
+        let (consumed, rem2) = input.split_at(diff);
+        debug_assert_eq!(rem, rem2);
         Ok((consumed, rem))
     }
 }
 
-impl<'i, F, T> Parser<'i> for F
-where
-    F: Fn(&'i str) -> IResult<'i, T>,
-{
-    type Output = T;
+/// A parser that fails if any input remains after it runs.
+///
+/// Constructed via the [`Parser::strict`] method.
+pub struct Strict<P>(P);
 
-    fn parse(&self, input: &'i str) -> IResult<'i, Self::Output> {
-        self(input)
+impl<P: Parser> Parser for Strict<P> {
+    type Output<'i> = P::Output<'i>;
+
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
+        let (res, rem) = self.0.parse(input)?;
+        if rem.is_empty() {
+            Ok((res, rem))
+        } else {
+            Err(Error::TrailingInput)
+        }
+    }
+}
+
+pub struct Func<F>(F);
+
+impl<F, T> Parser for Func<F>
+where
+    F: for<'i> Fn(&'i str) -> IResult<'i, T>,
+{
+    type Output<'i> = T;
+
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
+        (self.0)(input)
+    }
+}
+
+pub fn mk_parser<F, T>(f: F) -> Func<F>
+where
+    F: for<'i> Fn(&'i str) -> IResult<'i, T>,
+{
+    Func(f)
+}
+
+impl<F, P> Parser for F
+where
+    F: Fn() -> P,
+    P: Parser,
+{
+    type Output<'i> = P::Output<'i>;
+
+    fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
+        (self)().parse(input)
     }
 }
 
@@ -361,8 +425,8 @@ where
 /// The parser will fail if the input is empty, or the next character is not `c`.
 ///
 /// Outputs the extracted character.
-pub fn one<'i>(c: char) -> impl Parser<'i, Output = char> {
-    move |input: &'i str| -> IResult<'i, _> {
+pub fn one(c: char) -> impl for<'i> Parser<Output<'i> = char> {
+    mk_parser(move |input| {
         let sym = input.chars().next().ok_or(Error::InputExhausted)?;
         if sym == c {
             let (_, rem) = split_at_chars(input, 1);
@@ -370,7 +434,7 @@ pub fn one<'i>(c: char) -> impl Parser<'i, Output = char> {
         } else {
             Err(Error::UnexpectedChar(sym))
         }
-    }
+    })
 }
 
 /// A parser that extracts exactly the given sequence of characters from the input.
@@ -378,21 +442,31 @@ pub fn one<'i>(c: char) -> impl Parser<'i, Output = char> {
 /// The parser will fail if the given string is not a prefix of the input.
 ///
 /// Returns the extracted string slice from the input.
-pub fn literal<'i>(lit: &str) -> impl Parser<'i, Output = &'i str> + '_ {
-    move |input: &'i str| -> IResult<'i, _> {
-        let mut input_chars = input.chars();
-        for expected in lit.chars() {
-            if let Some(c) = input_chars.next() {
-                if c != expected {
-                    return Err(Error::UnexpectedChar(c));
-                }
-            } else {
-                return Err(Error::InputExhausted);
-            }
-        }
-
-        Ok(input.split_at(lit.len()))
+pub fn literal<'s>(lit: &'s str) -> impl for<'i> Parser<Output<'i> = &'i str> + 's {
+    struct Literal<'s> {
+        lit: &'s str,
     }
+
+    impl Parser for Literal<'_> {
+        type Output<'i> = &'i str;
+
+        fn parse<'i>(&self, input: &'i str) -> IResult<'i, Self::Output<'i>> {
+            let mut input_chars = input.chars();
+            for expected in self.lit.chars() {
+                if let Some(c) = input_chars.next() {
+                    if c != expected {
+                        return Err(Error::UnexpectedChar(c));
+                    }
+                } else {
+                    return Err(Error::InputExhausted);
+                }
+            }
+
+            Ok(input.split_at(self.lit.len()))
+        }
+    }
+
+    Literal { lit }
 }
 
 /// A parser that extracts a single character from the input, as long as it passes the given
@@ -402,11 +476,11 @@ pub fn literal<'i>(lit: &str) -> impl Parser<'i, Output = &'i str> + '_ {
 /// predicate.
 ///
 /// Returns the extracted character.
-pub fn predicate<'i, F>(pred: F) -> impl Parser<'i, Output = char>
+pub fn predicate<F>(pred: F) -> impl for<'i> Parser<Output<'i> = char>
 where
     F: Fn(char) -> bool,
 {
-    move |input: &'i str| -> IResult<'i, _> {
+    mk_parser(move |input| {
         let sym = input.chars().next().ok_or(Error::InputExhausted)?;
         if pred(sym) {
             let (_, rem) = split_at_chars(input, 1);
@@ -414,7 +488,7 @@ where
         } else {
             Err(Error::UnexpectedChar(sym))
         }
-    }
+    })
 }
 
 /// A parser that extracts as many characters as satsify the given predicate.
@@ -423,7 +497,7 @@ where
 /// the empty sequence.
 ///
 /// This is equivalent to `precicate(pred).many().consumed()`.
-pub fn extract_while<'i, F>(pred: F) -> impl Parser<'i, Output = &'i str>
+pub fn extract_while<F>(pred: F) -> impl for<'i> Parser<Output<'i> = &'i str>
 where
     F: Fn(char) -> bool,
 {
@@ -436,7 +510,7 @@ where
 /// to accept the empty sequence.
 ///
 /// This is equivalent to `extract_while(|c| !pred(c))`.
-pub fn extract_until<'i, F>(pred: F) -> impl Parser<'i, Output = &'i str>
+pub fn extract_until<F>(pred: F) -> impl for<'i> Parser<Output<'i> = &'i str>
 where
     F: Fn(char) -> bool,
 {
@@ -444,10 +518,8 @@ where
 }
 
 /// A parser that skips over any whitespace in the input.
-pub fn whitespace<'i>() -> impl Parser<'i, Output = ()> {
-    extract_while(|c| c.is_whitespace())
-        .optional()
-        .map(|_| Ok(()))
+pub fn whitespace() -> impl for<'i> Parser<Output<'i> = ()> {
+    extract_while(|c| c.is_whitespace()).optional().map(|_| ())
 }
 
 /// A parser that extracts an identifier from the input.
@@ -456,7 +528,7 @@ pub fn whitespace<'i>() -> impl Parser<'i, Output = ()> {
 /// of alphanumeric characters and `'_'`.
 ///
 /// This parser extracts as long an identifier as possible from the input.
-pub fn identifier<'i>() -> impl Parser<'i, Output = &'i str> {
+pub fn identifier() -> impl for<'i> Parser<Output<'i> = &'i str> {
     predicate(|c| c.is_alphabetic() || c == '_')
         .sequence(extract_while(|c| c.is_alphanumeric() || c == '_').optional())
         .consumed()
@@ -466,7 +538,7 @@ pub fn identifier<'i>() -> impl Parser<'i, Output = &'i str> {
 ///
 /// This parser does not convert the extracted string into a native integer; use
 /// [`Parser::map_from_str`] to do so.
-pub fn integer<'i>(radix: u32) -> impl Parser<'i, Output = &'i str> {
+pub fn integer(radix: u32) -> impl for<'i> Parser<Output<'i> = &'i str> {
     extract_while(move |c| c.is_digit(radix))
 }
 
@@ -484,6 +556,9 @@ fn split_at_chars(input: &str, n: usize) -> (&str, &str) {
 pub enum Error {
     #[error("early end of input")]
     InputExhausted,
+
+    #[error("trailing input")]
+    TrailingInput,
 
     #[error("unexpected character {0:?} in input")]
     UnexpectedChar(char),

@@ -36,6 +36,30 @@ impl Borrow<str> for Text {
     }
 }
 
+impl PartialEq<&str> for Text {
+    fn eq(&self, other: &&str) -> bool {
+        self.0.as_ref() == *other
+    }
+}
+
+impl PartialEq<&str> for &Text {
+    fn eq(&self, other: &&str) -> bool {
+        *self == other
+    }
+}
+
+impl PartialEq<Text> for &str {
+    fn eq(&self, other: &Text) -> bool {
+        other == self
+    }
+}
+
+impl PartialEq<&Text> for &str {
+    fn eq(&self, other: &&Text) -> bool {
+        other == self
+    }
+}
+
 impl<S: AsRef<str>> From<S> for Text {
     fn from(contents: S) -> Self {
         Self::new(contents.as_ref())
